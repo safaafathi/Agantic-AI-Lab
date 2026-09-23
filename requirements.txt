@@ -1,0 +1,3 @@
+pandas
+smolagents==1.26.0
+litellm
