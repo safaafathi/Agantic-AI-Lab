@@ -3,3 +3,5 @@ pycache/
 *.pyc 
 .env 
 .vscode/ 
+project_old/ 
+3.5 
