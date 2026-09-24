@@ -1,7 +1,7 @@
-.venv/ 
-pycache/ 
-*.pyc 
-.env 
-.vscode/ 
-project_old/ 
-3.5 
+.venv/
+__pycache__/
+*.pyc
+.env
+.vscode/
+project_old/
+3.5
