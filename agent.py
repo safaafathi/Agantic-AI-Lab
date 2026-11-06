@@ -1,7 +1,5 @@
-
 # ============================================================
-# Smart Student Data Analysis Agent
-# Using Smolagents + Ollama + Qwen
+# Smart Student Data Analysis Agent Using Smolagents
 # ============================================================
 
 import re
@@ -12,36 +10,128 @@ from tools import load_data
 
 
 # ============================================================
-# 1. Dataset Configuration
+# Configuration
 # ============================================================
 
 DATA_FILE = "data/students.csv"
 
+memory = {
+    "last_question": None,
+    "last_result": None,
+    "average_gpa": None
+}
+
 
 # ============================================================
-# 2. Load Student Data
+# Data Loading
 # ============================================================
 
 def get_data():
     """
-    Load the current student dataset.
+    Load the student dataset.
     """
-    return load_data(DATA_FILE)
+    df = load_data(DATA_FILE)
+
+    if df.empty:
+        raise ValueError("The student dataset is empty.")
+
+    required_columns = ["Name", "GPA"]
+
+    for column in required_columns:
+        if column not in df.columns:
+            raise ValueError(
+                f"Invalid dataset: missing column '{column}'."
+            )
+
+    df["GPA"] = pd.to_numeric(df["GPA"], errors="raise")
+
+    if df["GPA"].isna().any():
+        raise ValueError("The GPA column contains missing values.")
+
+    if not df["GPA"].between(0, 4).all():
+        raise ValueError(
+            "Invalid dataset: GPA values must be between 0 and 4."
+        )
+
+    return df
 
 
 # ============================================================
-# 3. Tool: Calculate Average GPA
+# GPA Validation
+# ============================================================
+
+def validate_gpa_threshold(gpa: float):
+    """
+    Validate GPA threshold.
+    """
+    if not 0 <= gpa <= 4:
+        raise ValueError(
+            "Threshold must be between 0 and 4."
+        )
+
+
+def validate_gpa_range(min_gpa: float, max_gpa: float):
+    """
+    Validate GPA range.
+    """
+    validate_gpa_threshold(min_gpa)
+    validate_gpa_threshold(max_gpa)
+
+    if min_gpa > max_gpa:
+        raise ValueError(
+            "Minimum GPA cannot be greater than maximum GPA."
+        )
+
+
+# ============================================================
+# Question Validation
+# ============================================================
+
+def validate_question(question: str):
+    """
+    Validate GPA thresholds in natural-language questions.
+    """
+
+    question_lower = question.lower().strip()
+
+    # GPA between two values
+    range_match = re.search(
+        r"between\s*(\d+(?:\.\d+)?)\s*"
+        r"(?:and|to)\s*(\d+(?:\.\d+)?)",
+        question_lower
+    )
+
+    if range_match:
+        min_gpa = float(range_match.group(1))
+        max_gpa = float(range_match.group(2))
+
+        validate_gpa_range(min_gpa, max_gpa)
+        return
+
+    # GPA above or below a number
+    threshold_match = re.search(
+        r"\b(?:above|greater than|more than|below|less than|under)"
+        r"\s*(\d+(?:\.\d+)?)",
+        question_lower
+    )
+
+    if threshold_match:
+        threshold = float(threshold_match.group(1))
+        validate_gpa_threshold(threshold)
+
+
+# ============================================================
+# Tool 1: Average GPA
 # ============================================================
 
 @tool
 def get_average_gpa() -> str:
     """
-    Calculate the average GPA of all students.
+    Calculate the average GPA.
 
     Returns:
-        The average GPA.
+        Average GPA of all students.
     """
-
     df = get_data()
 
     average = df["GPA"].mean()
@@ -50,7 +140,7 @@ def get_average_gpa() -> str:
 
 
 # ============================================================
-# 4. Tool: Find Student With Highest GPA
+# Tool 2: Highest GPA Student
 # ============================================================
 
 @tool
@@ -59,204 +149,121 @@ def get_highest_gpa_student() -> str:
     Find the student with the highest GPA.
 
     Returns:
-        Student name and GPA.
+        Name and GPA of the highest-performing student.
     """
-
     df = get_data()
 
     max_gpa = df["GPA"].max()
 
-    student = df[df["GPA"] == max_gpa].iloc[0]
+    students = df[df["GPA"] == max_gpa]
+
+    names = ", ".join(
+        students["Name"].astype(str).tolist()
+    )
 
     return (
-        f"Student with highest GPA: "
-        f"{student['Name']} ({student['GPA']})"
+        f"Student(s) with highest GPA: "
+        f"{names} ({max_gpa:.2f})"
     )
 
 
 # ============================================================
-# 5. Tool: Count Students Above a GPA
+# Tool 3: Students Above GPA
 # ============================================================
 
 @tool
 def count_students_above_gpa(gpa: float) -> str:
     """
-    Count students whose GPA is greater than the given GPA.
+    Count students above a GPA threshold.
 
     Args:
-        gpa: GPA threshold.
+        gpa: GPA threshold between 0 and 4.
 
     Returns:
-        Number of students above the GPA.
+        Number of students above the GPA threshold.
     """
+    try:
+        validate_gpa_threshold(gpa)
 
-    df = get_data()
+        df = get_data()
 
-    count = len(df[df["GPA"] > gpa])
+        count = len(df[df["GPA"] > gpa])
 
-    return f"Students above GPA {gpa}: {count}"
+        return f"Students above GPA {gpa}: {count}"
+
+    except ValueError as error:
+        return f"Validation error: {error}"
 
 
 # ============================================================
-# 6. Tool: Count All Students
+# Tool 4: Total Students
 # ============================================================
 
 @tool
 def get_student_count() -> str:
     """
-    Count the total number of students in the dataset.
+    Count all students.
 
     Returns:
         Total number of students.
     """
-
     df = get_data()
 
-    count = len(df)
-
-    return f"Total number of students: {count}"
+    return f"Total students: {len(df)}"
 
 
 # ============================================================
-# 7. Main Data Analysis Tool
+# Shared Analysis Function
 # ============================================================
 
-@tool
-def analyze_student_data(operation: str) -> str:
+def process_student_question(question: str) -> str:
     """
-    Perform a data analysis operation on the student dataset.
-
-    Args:
-        operation: The data analysis operation requested by the user,
-                   such as minimum GPA, maximum GPA, median GPA,
-                   average GPA, student count, columns,
-                   students above or below a GPA,
-                   students between GPA values,
-                   percentage calculations, listing students,
-                   or basic statistics.
-
-    Returns:
-        The result of the requested data analysis.
+    Process supported student-data questions using Pandas.
     """
+
+    q = question.lower().strip()
+
+    # IMPORTANT: Validate thresholds before any calculations.
+    validate_question(question)
 
     df = get_data()
 
-    operation_lower = operation.lower().strip()
-
-    # ========================================================
-    # Total number of students
-    # ========================================================
+    # --------------------------------------------------------
+    # Students Above Average
+    # --------------------------------------------------------
 
     if (
-        "total student" in operation_lower
-        or "student count" in operation_lower
-        or "number of students" in operation_lower
-        or "how many students" in operation_lower
+        "above average" in q
+        or "above the average" in q
     ):
-
-        return f"Total number of students: {len(df)}"
-
-
-    # ========================================================
-    # Dataset columns
-    # ========================================================
-
-    if (
-        "column" in operation_lower
-        or "fields" in operation_lower
-    ):
-
-        columns = ", ".join(df.columns)
-
-        return f"Dataset columns: {columns}"
-
-
-    # ========================================================
-    # Minimum GPA
-    # ========================================================
-
-    if (
-        "minimum gpa" in operation_lower
-        or "lowest gpa" in operation_lower
-        or "min gpa" in operation_lower
-    ):
-
-        minimum = df["GPA"].min()
-
-        return f"Minimum GPA: {minimum}"
-
-
-    # ========================================================
-    # Maximum GPA
-    # ========================================================
-
-    if (
-        "maximum gpa" in operation_lower
-        or "highest gpa" in operation_lower
-        or "max gpa" in operation_lower
-    ):
-
-        maximum = df["GPA"].max()
-
-        return f"Maximum GPA: {maximum}"
-
-
-    # ========================================================
-    # Median GPA
-    # ========================================================
-
-    if "median gpa" in operation_lower:
-
-        median = df["GPA"].median()
-
-        return f"Median GPA: {median}"
-
-
-    # ========================================================
-    # Average GPA
-    # ========================================================
-
-    if (
-        "average gpa" in operation_lower
-        or "mean gpa" in operation_lower
-    ):
-
         average = df["GPA"].mean()
 
-        return f"Average GPA: {average:.2f}"
+        count = len(df[df["GPA"] > average])
 
+        return (
+            f"Number of students above the average GPA "
+            f"({average:.2f}): {count}"
+        )
 
-    # ========================================================
-    # Percentage of students above a GPA
-    # Example:
-    # percentage above 3
-    # percentage above 3.5
-    # ========================================================
+    # --------------------------------------------------------
+    # Percentage Above GPA
+    # --------------------------------------------------------
 
-    if "percentage" in operation_lower and (
-        "above" in operation_lower
-        or "greater than" in operation_lower
-        or "more than" in operation_lower
-    ):
-
+    if "percentage" in q or "percent" in q:
         match = re.search(
-            r"(?:above|greater than|more than)\s*(\d+(?:\.\d+)?)",
-            operation_lower
+            r"\b(?:above|greater than|more than)"
+            r"\s*(\d+(?:\.\d+)?)",
+            q
         )
 
         if match:
-
             threshold = float(match.group(1))
+            validate_gpa_threshold(threshold)
 
-            count = len(
-                df[df["GPA"] > threshold]
-            )
-
+            count = len(df[df["GPA"] > threshold])
             total = len(df)
 
-            percentage = (
-                count / total
-            ) * 100
+            percentage = (count / total) * 100
 
             return (
                 f"Students above GPA {threshold}: "
@@ -264,182 +271,222 @@ def analyze_student_data(operation: str) -> str:
                 f"({percentage:.2f}%)"
             )
 
+    # --------------------------------------------------------
+    # GPA Between Two Values
+    # --------------------------------------------------------
 
-    # ========================================================
-    # Count students above a GPA
-    # Examples:
-    # students above 3
-    # students above 3.5
-    # greater than 3
-    # ========================================================
-
-    if (
-        "above" in operation_lower
-        or "greater than" in operation_lower
-        or "more than" in operation_lower
-    ):
-
+    if "between" in q:
         match = re.search(
-            r"(?:above|greater than|more than)\s*(\d+(?:\.\d+)?)",
-            operation_lower
+            r"between\s*(\d+(?:\.\d+)?)\s*"
+            r"(?:and|to)\s*(\d+(?:\.\d+)?)",
+            q
         )
 
         if match:
+            min_gpa = float(match.group(1))
+            max_gpa = float(match.group(2))
 
-            threshold = float(match.group(1))
-
-            count = len(
-                df[df["GPA"] > threshold]
-            )
-
-            return (
-                f"Students above GPA "
-                f"{threshold}: {count}"
-            )
-
-
-    # ========================================================
-    # Count students below a GPA
-    # ========================================================
-
-    if (
-        "below" in operation_lower
-        or "less than" in operation_lower
-        or "under" in operation_lower
-    ):
-
-        match = re.search(
-            r"(?:below|less than|under)\s*(\d+(?:\.\d+)?)",
-            operation_lower
-        )
-
-        if match:
-
-            threshold = float(match.group(1))
-
-            count = len(
-                df[df["GPA"] < threshold]
-            )
-
-            return (
-                f"Students below GPA "
-                f"{threshold}: {count}"
-            )
-
-
-    # ========================================================
-    # Students between two GPA values
-    # Example:
-    # between 3 and 3.5
-    # ========================================================
-
-    if "between" in operation_lower:
-
-        numbers = re.findall(
-            r"\d+(?:\.\d+)?",
-            operation_lower
-        )
-
-        if len(numbers) >= 2:
-
-            lower = float(numbers[0])
-            upper = float(numbers[1])
+            validate_gpa_range(min_gpa, max_gpa)
 
             count = len(
                 df[
-                    (df["GPA"] >= lower)
-                    &
-                    (df["GPA"] <= upper)
+                    (df["GPA"] >= min_gpa)
+                    & (df["GPA"] <= max_gpa)
                 ]
             )
 
             return (
                 f"Students with GPA between "
-                f"{lower} and {upper}: {count}"
+                f"{min_gpa} and {max_gpa}: {count}"
             )
 
+    # --------------------------------------------------------
+    # Students Above GPA
+    # --------------------------------------------------------
 
-    # ========================================================
-    # Students above average GPA
-    # ========================================================
-
-    if (
-        "above average" in operation_lower
-        or "above the average" in operation_lower
-    ):
-
-        average = df["GPA"].mean()
-
-        count = len(
-            df[df["GPA"] > average]
-        )
-
-        return (
-            f"Number of students above the "
-            f"average GPA ({average:.2f}): {count}"
-        )
-
-
-    # ========================================================
-    # List all students
-    # ========================================================
-
-    if (
-        "list all students" in operation_lower
-        or "list students" in operation_lower
-        or "show all students" in operation_lower
-    ):
-
-        return df[
-            ["Student_ID", "Name", "Age",
-             "Gender", "Department", "GPA"]
-        ].to_string(index=False)
-
-
-    # ========================================================
-    # Basic statistics
-    # ========================================================
-
-    if (
-        "basic statistics" in operation_lower
-        or "statistics" in operation_lower
-    ):
-
-        count = len(df)
-
-        average = df["GPA"].mean()
-
-        minimum = df["GPA"].min()
-
-        maximum = df["GPA"].max()
-
-        median = df["GPA"].median()
-
-        return (
-            f"Student count: {count}\n"
-            f"Average GPA: {average:.2f}\n"
-            f"Minimum GPA: {minimum}\n"
-            f"Maximum GPA: {maximum}\n"
-            f"Median GPA: {median}"
-        )
-
-
-    # ========================================================
-    # Unsupported operation
-    # ========================================================
-
-    return (
-        "I could not identify the requested analysis. "
-        "Try asking about average GPA, minimum GPA, "
-        "maximum GPA, median GPA, student count, "
-        "columns, students above or below a GPA, "
-        "students between GPA values, percentage "
-        "calculations, or basic statistics."
+    above_match = re.search(
+        r"\b(?:above|greater than|more than)"
+        r"\s*(\d+(?:\.\d+)?)",
+        q
     )
+
+    if above_match:
+        threshold = float(above_match.group(1))
+
+        validate_gpa_threshold(threshold)
+
+        count = len(df[df["GPA"] > threshold])
+
+        return f"Students above GPA {threshold}: {count}"
+
+    # --------------------------------------------------------
+    # Students Below GPA
+    # --------------------------------------------------------
+
+    below_match = re.search(
+        r"\b(?:below|less than|under)"
+        r"\s*(\d+(?:\.\d+)?)",
+        q
+    )
+
+    if below_match:
+        threshold = float(below_match.group(1))
+
+        validate_gpa_threshold(threshold)
+
+        count = len(df[df["GPA"] < threshold])
+
+        return f"Students below GPA {threshold}: {count}"
+
+    # --------------------------------------------------------
+    # Highest GPA Student
+    # --------------------------------------------------------
+
+    if (
+        "highest gpa" in q
+        or "who has the highest" in q
+        or "best gpa" in q
+        or "top student" in q
+    ):
+        return get_highest_gpa_student()
+
+    # --------------------------------------------------------
+    # Lowest GPA
+    # --------------------------------------------------------
+
+    if (
+        "minimum gpa" in q
+        or "lowest gpa" in q
+        or "min gpa" in q
+    ):
+        return f"Minimum GPA: {df['GPA'].min():.2f}"
+
+    # --------------------------------------------------------
+    # Maximum GPA
+    # --------------------------------------------------------
+
+    if (
+        "maximum gpa" in q
+        or "max gpa" in q
+    ):
+        return f"Maximum GPA: {df['GPA'].max():.2f}"
+
+    # --------------------------------------------------------
+    # Median GPA
+    # --------------------------------------------------------
+
+    if "median" in q:
+        return f"Median GPA: {df['GPA'].median():.2f}"
+
+    # --------------------------------------------------------
+    # Average GPA
+    # --------------------------------------------------------
+
+    if (
+        "average gpa" in q
+        or "mean gpa" in q
+        or "average grade" in q
+    ):
+        return get_average_gpa()
+
+    # --------------------------------------------------------
+    # Dataset Columns
+    # --------------------------------------------------------
+
+    if (
+        "columns" in q
+        or "column names" in q
+        or "features" in q
+    ):
+        return (
+            "Dataset columns: "
+            + ", ".join(df.columns.astype(str))
+        )
+
+    # --------------------------------------------------------
+    # Basic Statistics
+    # --------------------------------------------------------
+
+    if (
+        "statistics" in q
+        or "summary" in q
+    ):
+        return (
+            f"Total students: {len(df)}\n"
+            f"Average GPA: {df['GPA'].mean():.2f}\n"
+            f"Maximum GPA: {df['GPA'].max():.2f}\n"
+            f"Minimum GPA: {df['GPA'].min():.2f}\n"
+            f"Median GPA: {df['GPA'].median():.2f}"
+        )
+
+    # --------------------------------------------------------
+    # Total Students
+    # --------------------------------------------------------
+
+    if (
+        "total students" in q
+        or "number of students" in q
+        or "how many students" in q
+        or "count students" in q
+        or "students are there" in q
+    ):
+        return get_student_count()
+
+    return ""
 
 
 # ============================================================
-# 8. Ollama + Qwen Model
+# Tool 5: Analyze Student Data
+# ============================================================
+
+@tool
+def analyze_student_data(operation: str) -> str:
+    """
+    Analyze student data using a natural-language operation.
+
+    Args:
+        operation: Student-data analysis request.
+
+    Returns:
+        The result of the requested analysis.
+    """
+    try:
+        result = process_student_question(operation)
+
+        if result:
+            return result
+
+        return (
+            "Unsupported analysis operation. "
+            "Try asking about GPA statistics, "
+            "student counts, or GPA thresholds."
+        )
+
+    except ValueError as error:
+        return f"Validation error: {error}"
+
+
+# ============================================================
+# Agent Instructions
+# ============================================================
+
+instructions = """
+You are a Smart Student Data Analysis Agent.
+
+You answer questions about student data using tools.
+
+Rules:
+1. Use the actual dataset.
+2. Never invent student names or GPA values.
+3. GPA thresholds must be between 0 and 4.
+4. Reject invalid thresholds.
+5. Explain unsupported requests.
+6. Give clear and concise answers.
+"""
+
+
+# ============================================================
+# Model Configuration
 # ============================================================
 
 model = LiteLLMModel(
@@ -449,49 +496,7 @@ model = LiteLLMModel(
 
 
 # ============================================================
-# 9. Agent Instructions
-# ============================================================
-
-instructions = """
-You are a Student Data Analysis Agent.
-
-Your job is to answer questions about the student CSV dataset.
-
-IMPORTANT RULES:
-
-1. Always use the actual student dataset.
-
-2. Never invent student names, GPA values,
-   statistics, or additional data.
-
-3. GPA values are between 0 and 4.
-
-4. For data analysis questions, use the
-   analyze_student_data tool.
-
-5. Never create fake students or fake datasets.
-
-6. Never use random data.
-
-7. Never invent columns that do not exist.
-
-8. Do not invent variables or tools.
-
-9. If a tool returns a result, use that result directly.
-
-10. Do not perform calculations using textual tool outputs
-    when the calculation can be performed directly by
-    the analyze_student_data tool.
-
-11. If the requested information cannot be obtained
-    from the dataset, clearly say so.
-
-12. Give a clear and concise final answer.
-"""
-
-
-# ============================================================
-# 10. Create CodeAgent
+# Create Agent
 # ============================================================
 
 agent = CodeAgent(
@@ -510,416 +515,137 @@ agent = CodeAgent(
 
 
 # ============================================================
-# 11. Conversation Memory
-# ============================================================
-
-memory = {
-    "last_question": None,
-    "last_result": None,
-    "average_gpa": None
-}
-
-
-# ============================================================
-# 12. Main Question Handler
+# Memory and Question Handling
 # ============================================================
 
 def run_with_memory(question: str) -> str:
-
-    question_lower = question.lower().strip()
+    """
+    Process a question and store the result in memory.
+    """
 
     memory["last_question"] = question
 
+    try:
+        # Validate the question before any analysis.
+        validate_question(question)
 
-    # ========================================================
-    # Above Average GPA
-    # ========================================================
+        # Handle supported questions directly.
+        result = process_student_question(question)
 
-    if (
-        "above average" in question_lower
-        or "above the average" in question_lower
-    ):
-
-        df = get_data()
-
-        average = df["GPA"].mean()
-
-        count = len(
-            df[df["GPA"] > average]
-        )
-
-        result = (
-            f"Number of students above the "
-            f"average GPA ({average:.2f}): {count}"
-        )
+        if not result:
+            # Use the AI Agent for other questions.
+            result = str(agent.run(question))
 
         memory["last_result"] = result
 
+        if (
+            "average gpa" in question.lower()
+            or "mean gpa" in question.lower()
+        ):
+            memory["average_gpa"] = result
+
         return result
 
-
-    # ========================================================
-    # Average GPA
-    # ========================================================
-
-    if (
-        "average gpa" in question_lower
-        or "mean gpa" in question_lower
-    ):
-
-        result = get_average_gpa()
-
-        memory["average_gpa"] = result
+    except ValueError as error:
+        result = f"Validation error: {error}"
         memory["last_result"] = result
-
         return result
 
-
-    # ========================================================
-    # Highest GPA
-    # ========================================================
-
-    if (
-        "highest gpa" in question_lower
-        or "who has the highest" in question_lower
-        or "best gpa" in question_lower
-    ):
-
-        result = get_highest_gpa_student()
-
+    except Exception as error:
+        result = f"Unable to process the question: {error}"
         memory["last_result"] = result
-
         return result
-
-
-    # ========================================================
-    # Minimum GPA
-    # ========================================================
-
-    if (
-        "minimum gpa" in question_lower
-        or "lowest gpa" in question_lower
-        or "min gpa" in question_lower
-    ):
-
-        df = get_data()
-
-        minimum = df["GPA"].min()
-
-        result = f"Minimum GPA: {minimum}"
-
-        memory["last_result"] = result
-
-        return result
-
-
-    # ========================================================
-    # Maximum GPA
-    # ========================================================
-
-    if (
-        "maximum gpa" in question_lower
-        or "max gpa" in question_lower
-    ):
-
-        df = get_data()
-
-        maximum = df["GPA"].max()
-
-        result = f"Maximum GPA: {maximum}"
-
-        memory["last_result"] = result
-
-        return result
-
-
-    # ========================================================
-    # Median GPA
-    # ========================================================
-
-    if "median gpa" in question_lower:
-
-        df = get_data()
-
-        median = df["GPA"].median()
-
-        result = f"Median GPA: {median}"
-
-        memory["last_result"] = result
-
-        return result
-
-
-    # ========================================================
-    # Percentage above a GPA
-    # ========================================================
-
-    if (
-        "percentage" in question_lower
-        and (
-            "above" in question_lower
-            or "greater than" in question_lower
-            or "more than" in question_lower
-        )
-    ):
-
-        match = re.search(
-            r"(?:above|greater than|more than)\s*(\d+(?:\.\d+)?)",
-            question_lower
-        )
-
-        if match:
-
-            threshold = float(match.group(1))
-
-            df = get_data()
-
-            count = len(
-                df[df["GPA"] > threshold]
-            )
-
-            total = len(df)
-
-            percentage = (
-                count / total
-            ) * 100
-
-            result = (
-                f"Students above GPA {threshold}: "
-                f"{count} out of {total} "
-                f"({percentage:.2f}%)"
-            )
-
-            memory["last_result"] = result
-
-            return result
-
-
-    # ========================================================
-    # Count students above a GPA
-    # ========================================================
-
-    if (
-        "above" in question_lower
-        or "greater than" in question_lower
-        or "more than" in question_lower
-    ):
-
-        match = re.search(
-            r"(?:above|greater than|more than)\s*(\d+(?:\.\d+)?)",
-            question_lower
-        )
-
-        if match:
-
-            threshold = float(match.group(1))
-
-            result = count_students_above_gpa(
-                threshold
-            )
-
-            memory["last_result"] = result
-
-            return result
-
-
-    # ========================================================
-    # Count students below a GPA
-    # ========================================================
-
-    if (
-        "below" in question_lower
-        or "less than" in question_lower
-        or "under" in question_lower
-    ):
-
-        match = re.search(
-            r"(?:below|less than|under)\s*(\d+(?:\.\d+)?)",
-            question_lower
-        )
-
-        if match:
-
-            threshold = float(match.group(1))
-
-            df = get_data()
-
-            count = len(
-                df[df["GPA"] < threshold]
-            )
-
-            result = (
-                f"Students below GPA "
-                f"{threshold}: {count}"
-            )
-
-            memory["last_result"] = result
-
-            return result
-
-
-    # ========================================================
-    # Total students
-    # ========================================================
-
-    if (
-        "total students" in question_lower
-        or "number of students" in question_lower
-        or "how many students are there" in question_lower
-        or "student count" in question_lower
-    ):
-
-        result = get_student_count()
-
-        memory["last_result"] = result
-
-        return result
-
-
-    # ========================================================
-    # Dataset columns
-    # ========================================================
-
-    if (
-        "what columns" in question_lower
-        or "columns in the dataset" in question_lower
-        or "dataset columns" in question_lower
-    ):
-
-        df = get_data()
-
-        columns = ", ".join(df.columns)
-
-        result = f"Dataset columns: {columns}"
-
-        memory["last_result"] = result
-
-        return result
-
-
-    # ========================================================
-    # Basic statistics
-    # ========================================================
-
-    if (
-        "basic statistics" in question_lower
-        or "statistics about the dataset" in question_lower
-    ):
-
-        df = get_data()
-
-        count = len(df)
-
-        average = df["GPA"].mean()
-
-        minimum = df["GPA"].min()
-
-        maximum = df["GPA"].max()
-
-        median = df["GPA"].median()
-
-        result = (
-            f"Student count: {count}\n"
-            f"Average GPA: {average:.2f}\n"
-            f"Minimum GPA: {minimum}\n"
-            f"Maximum GPA: {maximum}\n"
-            f"Median GPA: {median}"
-        )
-
-        memory["last_result"] = result
-
-        return result
-
-
-    # ========================================================
-    # Other questions → LLM Agent
-    # ========================================================
-
-    result = agent.run(question)
-
-    memory["last_result"] = result
-
-    return result
 
 
 # ============================================================
-# 13. Evaluation Tests
+# Evaluation Tests
 # ============================================================
 
 def run_evaluation_tests():
+    """
+    Run evaluation tests for the student-data agent.
+    """
 
     tests = [
-
-        (
-            "What is the average GPA?",
-            "Average GPA: 3.39"
-        ),
-
-        (
-            "Who has the highest GPA?",
-            "Huda"
-        ),
-
-        (
-            "How many students have GPA above 3.5?",
-            "4"
-        ),
-
-        (
-            "How many students are above the average GPA?",
-            "6"
-        ),
-
-        (
-            "How many students are there?",
-            "10"
-        )
+        {
+            "name": "Average GPA",
+            "question": "What is the average GPA?",
+            "expected": "3.39"
+        },
+        {
+            "name": "Highest GPA",
+            "question": "Who has the highest GPA?",
+            "expected": "Huda"
+        },
+        {
+            "name": "Students above 3.5",
+            "question": "How many students have GPA above 3.5?",
+            "expected": "Students above GPA 3.5: 4"
+        },
+        {
+            "name": "Students above average",
+            "question": "How many students are above average GPA?",
+            "expected": "6"
+        },
+        {
+            "name": "Total students",
+            "question": "How many students are there?",
+            "expected": "Total students: 10"
+        },
+        {
+            "name": "Invalid GPA above 5",
+            "question": "How many students have GPA above 5?",
+            "expected": "Validation error"
+        },
+        {
+            "name": "Invalid GPA below 6",
+            "question": "How many students have GPA below 6?",
+            "expected": "Validation error"
+        }
     ]
-
 
     passed = 0
 
+    print("\n" + "=" * 55)
+    print("SMART STUDENT DATA ANALYSIS AGENT")
+    print("EVALUATION RESULTS")
+    print("=" * 55)
 
-    print("\n")
-    print("=" * 60)
-    print("EVALUATION TESTS")
-    print("=" * 60)
+    for test in tests:
+        try:
+            result = run_with_memory(test["question"])
+
+            success = (
+                test["expected"].lower()
+                in str(result).lower()
+            )
+
+            if success:
+                passed += 1
+                status = "PASS"
+            else:
+                status = "FAIL"
+
+            print(f"\nTest: {test['name']}")
+            print(f"Status: {status}")
+            print(f"Expected: {test['expected']}")
+            print(f"Actual: {result}")
+
+        except Exception as error:
+            print(f"\nTest: {test['name']}")
+            print("Status: FAIL")
+            print(f"Error: {error}")
+
+    print("\n" + "=" * 55)
+    print(f"Evaluation score: {passed}/{len(tests)}")
+    print("=" * 55)
+
+    return passed, len(tests)
 
 
-    for question, expected in tests:
+# ============================================================
+# Main
+# ============================================================
 
-        print("\nQuestion:", question)
-
-        result = run_with_memory(question)
-
-        print("Result:", result)
-
-        if expected.lower() in str(result).lower():
-
-            print("PASS")
-
-            passed += 1
-
-        else:
-
-            print("FAIL")
-
-
-    print("\n")
-    print("=" * 60)
-
-    print(
-        f"Evaluation result: "
-        f"{passed}/{len(tests)}"
-    )
-
-    if passed == len(tests):
-
-        print("All evaluation tests passed.")
-
-    else:
-
-        print("Some evaluation tests failed.")
-
-    print("=" * 60)
-
+if __name__ == "__main__":
+    run_evaluation_tests()
