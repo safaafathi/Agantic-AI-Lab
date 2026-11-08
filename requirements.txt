@@ -1,3 +1,4 @@
-pandas
+pandas==3.1.1
 smolagents==1.26.0
-litellm
+litellm==1.108.2
+gradio==6.31.0
